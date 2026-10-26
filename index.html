@@ -2325,17 +2325,14 @@
 </script>
 
 <!-- ============================================================ -->
-<!-- Firebase Integration (Modular SDK) -->
+<!-- Firebase & Firestore Integration (Modular SDK) -->
 <!-- ============================================================ -->
 <script type="module">
-    // Import the functions you need from the SDKs you need
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
     import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-analytics.js";
-    // TODO: Add SDKs for Firebase products that you want to use
-    // https://firebase.google.com/docs/web/setup#available-libraries
+    import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
-    // Your web app's Firebase configuration
-    // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+    // إعدادات المشروع السحابي
     const firebaseConfig = {
       apiKey: "AIzaSyB2g8ZrwpaF9svjQxn5xfILZDkZcG34d8Q",
       authDomain: "testonlinefchoco.firebaseapp.com",
@@ -2346,9 +2343,60 @@
       measurementId: "G-TQJTDPG04Z"
     };
 
-    // Initialize Firebase
+    // تهيئة Firebase
     const app = initializeApp(firebaseConfig);
     const analytics = getAnalytics(app);
+    const db = getFirestore(app);
+
+    // ربط قاعدة البيانات بالنظام العام
+    window.db = db;
+
+    // دوال المزامنة السحابية مع Firestore
+    import { 
+        collection as fsCollection, 
+        doc as fsDoc, 
+        setDoc as fsSetDoc, 
+        onSnapshot as fsOnSnapshot 
+    } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+
+    // مزامنة الفواتير المحفوظة لحظياً عند حدوث أي تغيير سحابياً أو محلياً
+    window.syncInvoiceToCloud = async function(invoiceData) {
+        try {
+            const docRef = fsDoc(db, "invoices", String(invoiceData.number));
+            await fsSetDoc(docRef, invoiceData);
+            console.log("تم رفع الفاتورة للسحابة بنجاح:", invoiceData.number);
+        } catch (e) {
+            console.error("خطأ في رفع الفاتورة للسحابة:", e);
+        }
+    };
+
+    // الاستماع الفوري للتحديثات من السحابة لجميع الأجهزة المتصلة
+    fsOnSnapshot(fsCollection(db, "invoices"), (snapshot) => {
+        let cloudInvoices = [];
+        snapshot.forEach((doc) => {
+            cloudInvoices.push(doc.data());
+        });
+
+        if (cloudInvoices.length > 0) {
+            // دمج الفواتير السحابية مع المحلية لضمان عدم ضياع أي بيانات
+            const localInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
+            
+            // خريطة لتجنب التكرار والاعتتماد على الأحدث
+            const mergedMap = new Map();
+            localInvoices.forEach(inv => mergedMap.set(String(inv.number), inv));
+            cloudInvoices.forEach(inv => mergedMap.set(String(inv.number), inv));
+
+            const finalInvoices = Array.from(mergedMap.values());
+            localStorage.setItem('fondant_saved_invoices', JSON.stringify(finalInvoices));
+            
+            // تحديث واجهة الفواتير المحفوظة إذا كانت مفتوحة
+            if (typeof renderSavedInvoicesList === 'function' && document.getElementById('savedInvoicesModal').style.display === 'flex') {
+                renderSavedInvoicesList();
+            }
+        }
+    });
+
+</script>
 </script>
 
 </body>
