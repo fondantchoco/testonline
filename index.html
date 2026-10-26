@@ -966,7 +966,6 @@
     function getTodayDateInputString() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
     invoiceDateInput.value = getDefaultInvoiceDate();
-    // Set min date attribute on all date inputs
     document.querySelectorAll('input[type="date"]').forEach(el => el.setAttribute('min', DEFAULT_FROM_DATE));
 
     streetInput.addEventListener('paste', function(e) { e.preventDefault(); const text = (e.clipboardData || window.clipboardData).getData('text'); document.execCommand('insertText', false, text); });
@@ -1014,7 +1013,6 @@
         qtyInput.addEventListener('click', function() { const self = this; setTimeout(() => { try { self.setSelectionRange(0, self.value.length); } catch(err) { try { self.select(); } catch(e){} } }, 0); });
     }
 
-    // دالة إدراج صف في موقع محدد
     function createRowElement(itemData = null, insertPos = null) {
         const rowId = Date.now() + Math.random().toString().substr(2, 4);
         const tr = document.createElement('tr');
@@ -1034,7 +1032,6 @@
             <td class="no-print"><button class="btn-move-to-return" title="نقل إلى المرتجعات" onclick="moveToReturns('${rowId}')">↩️</button></td>
             <td class="no-print"><button class="btn-danger" style="padding:3px 5px; border-radius:3px; font-size:12px; width:100%;" onclick="document.getElementById('row-${rowId}').remove(); updateGrandTotal();">✖</button></td>
         `;
-        // إدراج في الموقع المحدد أو في النهاية
         if (insertPos !== null && insertPos >= 0 && insertPos < invoiceRows.children.length) {
             invoiceRows.insertBefore(tr, invoiceRows.children[insertPos]);
         } else {
@@ -1153,7 +1150,6 @@
         updateGrandTotal();
     }
 
-    // دالة تحديد موضع الإدراج حسب ترتيب الأصناف في DB
     function getInsertPositionByItemName(itemName) {
         const dbItems = getActiveItemsDB();
         const dbIndex = dbItems.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
@@ -1168,7 +1164,6 @@
         return rows.length;
     }
 
-    // إرجاع حبة واحدة من المرتجعات إلى الفاتورة (في الموضع الأصلي)
     function returnToInvoice(returnRowId) {
         const tr = document.getElementById('return-row-' + returnRowId); if (!tr) return;
         const prodInput = tr.querySelector('.prod-input');
@@ -1302,32 +1297,23 @@
         finally { document.body.removeChild(temp); }
     }
 
-    // ⭐ تصدير الجدول الفارغ إلى XLSX
     function generateEmptyTableXLSX() {
         try {
             const hospitals = [...new Set(hospitalCustomersDB.map(h => normalizeHospitalName(h)))].filter(h => h);
             const allItems = hospitalItemsDB.map(i => i.name);
             if (!hospitals.length) { alert('لا توجد مستشفيات مسجلة'); return; }
             if (!allItems.length) { alert('لا توجد أصناف مسجلة'); return; }
-            
             const data = [];
-            // Header: الصنف + كل المستشفيات
             const headerRow = ['الصنف / Item'];
             hospitals.forEach(h => headerRow.push(h));
             data.push(headerRow);
-            // Item rows
             allItems.forEach((item, idx) => {
                 const row = [`${idx + 1}. ${item}`];
                 hospitals.forEach(() => row.push(''));
                 data.push(row);
             });
-            
             const ws = XLSX.utils.aoa_to_sheet(data);
-            ws['!cols'] = [
-                { wch: 32 },
-                ...hospitals.map(() => ({ wch: 18 }))
-            ];
-            // Add styling for header row
+            ws['!cols'] = [ { wch: 32 }, ...hospitals.map(() => ({ wch: 18 })) ];
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Empty Table');
             XLSX.writeFile(wb, `Empty_Table_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -1335,7 +1321,6 @@
         } catch (err) { alert('حدث خطأ: ' + err.message); }
     }
 
-    // تصدير الجدول الفارغ PDF
     async function generateEmptyTablePDF() {
         try {
             const hospitals = [...new Set(hospitalCustomersDB.map(h => normalizeHospitalName(h)))].filter(h => h);
@@ -1403,20 +1388,27 @@
         openModal('missingInvoicesModal');
     }
     function missingYes() { const current = _missingQueue[0]; if (current != null) { const ack = JSON.parse(localStorage.getItem('fondant_acknowledged_gaps') || '[]'); if (!ack.includes(current)) ack.push(current); localStorage.setItem('fondant_acknowledged_gaps', JSON.stringify(ack)); addLogEntry(`تأكيد تجاهل رقم الفاتورة ${current}`, false); } _missingQueue.shift(); showNextMissingWarning(); }
+
+    // ✅ إصلاح: إزالة الاستدعاء المعطوب لـ newInvoiceData + إضافة مزامنة صحيحة للسحابة
     function missingRegisterCancelled() {
         const current = _missingQueue[0];
         if (current != null) {
             const saved = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
             const today = getTodayDateInputString();
-            if (!saved.some(inv => parseInt(inv.number) === current)) { saved.push({ number: current, date: today, customer: '', phone: '', total: '0.000', type: 'hospital', deliveryFee: 0, items: [], returns: [], cancelled: true, cancelledAt: new Date().toISOString() }); localStorage.setItem('fondant_saved_invoices', JSON.stringify(saved)); addLogEntry(`تسجيل الفاتورة ${current} كملغية`, false); }
+            if (!saved.some(inv => parseInt(inv.number) === current)) {
+                const cancelledInvoice = { number: current, date: today, customer: '', phone: '', total: '0.000', type: 'hospital', deliveryFee: 0, items: [], returns: [], cancelled: true, cancelledAt: new Date().toISOString(), updatedAt: Date.now() };
+                saved.push(cancelledInvoice);
+                localStorage.setItem('fondant_saved_invoices', JSON.stringify(saved));
+                addLogEntry(`تسجيل الفاتورة ${current} كملغية`, false);
+                // ✅ مزامنة الفاتورة الملغية مع السحابة
+                if (typeof window.syncInvoiceToCloud === 'function') {
+                    window.syncInvoiceToCloud(cancelledInvoice);
+                }
+            }
         }
-// إرسال الفاتورة إلى سحابة Firestore فوراً
-if (typeof window.syncInvoiceToCloud === 'function') {
-    window.syncInvoiceToCloud(newInvoiceData);
-}
-
         _missingQueue.shift(); showNextMissingWarning();
     }
+
     function missingNo() { _missingQueue = []; closeModal('missingInvoicesModal'); const cb = _missingCallback; _missingCallback = null; if (cb) cb(); }
 
     document.getElementById('saveInvoiceBtn').addEventListener('click', function() {
@@ -1441,13 +1433,22 @@ if (typeof window.syncInvoiceToCloud === 'function') {
         if (invNum > expected) { const ack = JSON.parse(localStorage.getItem('fondant_acknowledged_gaps') || '[]'); for (let n = expected; n < invNum; n++) if (!ack.includes(n)) ack.push(n); localStorage.setItem('fondant_acknowledged_gaps', JSON.stringify(ack)); }
         closeModal('skipWarningModal'); performSaveInvoice(invNum, false);
     }
+    // ✅ إصلاح: إضافة مزامنة الفواتير الملغية مع السحابة
     function skipWarningRegisterCancelled() {
         const invNum = window._skipInvNum, expected = window._skipExpected;
         if (invNum > expected) {
             const saved = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
             const today = getTodayDateInputString();
             let count = 0;
-            for (let n = expected; n < invNum; n++) { if (saved.some(inv => parseInt(inv.number) === n)) continue; saved.push({ number: n, date: today, customer: '', phone: '', total: '0.000', type: invoiceType, deliveryFee: 0, items: [], returns: [], cancelled: true, cancelledAt: new Date().toISOString() }); count++; }
+            for (let n = expected; n < invNum; n++) {
+                if (saved.some(inv => parseInt(inv.number) === n)) continue;
+                const cancelledInvoice = { number: n, date: today, customer: '', phone: '', total: '0.000', type: invoiceType, deliveryFee: 0, items: [], returns: [], cancelled: true, cancelledAt: new Date().toISOString(), updatedAt: Date.now() };
+                saved.push(cancelledInvoice);
+                if (typeof window.syncInvoiceToCloud === 'function') {
+                    window.syncInvoiceToCloud(cancelledInvoice);
+                }
+                count++;
+            }
             if (count > 0) { localStorage.setItem('fondant_saved_invoices', JSON.stringify(saved)); addLogEntry(`تسجيل ${count} فاتورة ملغية`, false); }
         }
         closeModal('skipWarningModal'); performSaveInvoice(invNum, false);
@@ -1497,10 +1498,18 @@ if (typeof window.syncInvoiceToCloud === 'function') {
         const currentStreet = streetInput.innerText.trim();
         const currentJeda = document.getElementById('jedaInput').value;
         const currentHome = document.getElementById('homeInput').value;
-        const newInvoiceData = { number: invNum, date: invoiceDateInput.value, customer: custName, phone: phoneVal, total: grandTotal, type: invoiceType, deliveryFee: deliveryFee, items, returns, area: currentArea, block: currentBlock, street: currentStreet, jeda: currentJeda, home: currentHome };
+
+        // ✅ إضافة updatedAt لمقارنة التحديثات عند الدمج من السحابة
+        const newInvoiceData = { number: invNum, date: invoiceDateInput.value, customer: custName, phone: phoneVal, total: grandTotal, type: invoiceType, deliveryFee: deliveryFee, items, returns, area: currentArea, block: currentBlock, street: currentStreet, jeda: currentJeda, home: currentHome, updatedAt: Date.now() };
         if (cancelled) { newInvoiceData.cancelled = true; newInvoiceData.cancelledAt = new Date().toISOString(); }
         savedInvoices.push(newInvoiceData);
         localStorage.setItem('fondant_saved_invoices', JSON.stringify(savedInvoices));
+
+        // ✅ الأهم: مزامنة الفاتورة مع السحابة (كانت مفقودة تماماً!)
+        if (typeof window.syncInvoiceToCloud === 'function') {
+            window.syncInvoiceToCloud(newInvoiceData);
+        }
+
         const prevLast = parseInt(localStorage.getItem('fondant_last_inv_num') || "5000");
         if (parseInt(invNum) > prevLast) localStorage.setItem('fondant_last_inv_num', invNum);
         if (!cancelled && invoiceType === 'external' && (custName || phoneVal)) {
@@ -1565,7 +1574,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
         finally { a4Container.classList.remove('pdf-mode'); invoiceType = currentSavedType; updateInvoiceTypeUI(); currentInvoiceNum = getExpectedNextInvoiceNumber(); invoiceNumberInput.value = currentInvoiceNum; clearFormFields(); }
     }
 
-    // ⭐ تنزيل فاتورة محددة PDF
     function openSpecificInvoicePDFModal() { document.getElementById('specificInvoiceNum').value = ''; openModal('specificInvoicePDFModal'); setTimeout(() => document.getElementById('specificInvoiceNum').focus(), 100); }
     async function executeSpecificInvoicePDF() {
         const numStr = document.getElementById('specificInvoiceNum').value.trim();
@@ -1640,6 +1648,7 @@ if (typeof window.syncInvoiceToCloud === 'function') {
 
     document.getElementById('viewInvoicesBtn').addEventListener('click', () => { renderSavedInvoicesList(); openModal('savedInvoicesModal'); setTimeout(() => { checkAndWarnMissingInvoices(); }, 300); });
 
+    // ✅ إصلاح: إضافة حذف الفاتورة من السحابة أيضاً
     function cancelLastInvoice() {
         requestPassword('أدخل كلمة المرور لإلغاء آخر فاتورة', '123321', () => {
             const saved = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
@@ -1651,6 +1660,10 @@ if (typeof window.syncInvoiceToCloud === 'function') {
             const newSaved = saved.filter(inv => parseInt(inv.number) !== parseInt(lastInv.number));
             localStorage.setItem('fondant_saved_invoices', JSON.stringify(newSaved));
             localStorage.setItem('fondant_last_inv_num', parseInt(lastInv.number) - 1);
+            // ✅ حذف من السحابة أيضاً
+            if (typeof window.deleteInvoiceFromCloud === 'function') {
+                window.deleteInvoiceFromCloud(lastInv.number);
+            }
             currentInvoiceNum = getExpectedNextInvoiceNumber();
             invoiceNumberInput.value = currentInvoiceNum;
             addLogEntry(`حذف آخر فاتورة رقم [ ${lastInv.number} ]`, false);
@@ -1659,7 +1672,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
         });
     }
 
-    // تحميل فاتورة (مع السماح بتعديل الملغية بكلمة مرور)
     function loadSavedInvoice(invNum) {
         const saved = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
         const inv = saved.find(i => parseInt(i.number) === parseInt(invNum));
@@ -1811,7 +1823,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
     }
     async function exportHospitalItemsPDF() { if (!lastHospitalItemsHTML) { alert('اعرض التقرير أولاً'); return; } await exportHTMLToPDF(lastHospitalItemsHTML, lastHospitalItemsFilename); }
 
-    // تقرير المرتجعات (تفصيلي)
     let lastReturnsReportHTML = '', lastReturnsReportFilename = '';
     document.getElementById('returnsReportBtn').addEventListener('click', () => { document.getElementById('returnsReportFromDate').value = DEFAULT_FROM_DATE; document.getElementById('returnsReportToDate').value = getTodayDateInputString(); openModal('returnsReportModal'); });
     function generateReturnsReport() {
@@ -1856,7 +1867,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
     }
     async function exportReturnsReportPDF() { if (!lastReturnsReportHTML) { alert('اعرض التقرير أولاً'); return; } await exportHTMLToPDF(lastReturnsReportHTML, lastReturnsReportFilename); }
 
-    // ⭐ تقرير المرتجعات المجمعة (جديد) — لكل مستشفى
     let lastConsolidatedReturnsHTML = '', lastConsolidatedReturnsFilename = '';
     document.getElementById('consolidatedReturnsBtn').addEventListener('click', () => { document.getElementById('consolidatedReturnsFromDate').value = DEFAULT_FROM_DATE; document.getElementById('consolidatedReturnsToDate').value = getTodayDateInputString(); openModal('consolidatedReturnsModal'); });
 
@@ -1871,7 +1881,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
             if (toDate && inv.date > toDate) return false;
             return true;
         });
-        // تجميع المرتجعات
         const returnsByHosp = {};
         filtered.forEach(inv => {
             const hosp = normalizeHospitalName(inv.customer) || (inv.customer || '—');
@@ -1887,7 +1896,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
                 returnsByHosp[hosp].invoicesCount.add(inv.number);
             });
         });
-        // الفواتير المستوردة من Excel
         const imported = JSON.parse(localStorage.getItem('fondant_imported_hospital_sales') || '[]');
         const importedFiltered = imported.filter(row => {
             if (!row.date) return false;
@@ -1902,7 +1910,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
             importedByHosp[hosp].count++;
             importedByHosp[hosp].amount += parseFloat(row.amount) || 0;
         });
-        // دمج كل المستشفيات
         const allHospitals = [...new Set([...Object.keys(returnsByHosp), ...Object.keys(importedByHosp)])].sort();
         if (!allHospitals.length) { resultArea.innerHTML = `<div style="text-align:center;padding:30px;color:#c00;font-weight:bold;">لا توجد بيانات في الفترة المحددة.</div>`; lastConsolidatedReturnsHTML = ''; return; }
         let rowsHTML = '';
@@ -1970,7 +1977,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
     }
     async function exportConsolidatedReturnsPDF() { if (!lastConsolidatedReturnsHTML) { alert('اعرض التقرير أولاً'); return; } await exportHTMLToPDF(lastConsolidatedReturnsHTML, lastConsolidatedReturnsFilename); }
 
-    // ⭐ كشف باب الخير مع الفواتير المستوردة
     document.getElementById('babKhairBtn').addEventListener('click', () => { document.getElementById('babKhairFromDate').value = DEFAULT_FROM_DATE; document.getElementById('babKhairToDate').value = getTodayDateInputString(); openModal('babKhairModal'); });
     let lastBabKhairHTML = '', lastBabKhairFilename = '', lastBabKhairRowsData = [];
 
@@ -1984,7 +1990,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
             if (toDate && inv.date > toDate) return false;
             return true;
         });
-        // الفواتير المستوردة من Excel
         const imported = JSON.parse(localStorage.getItem('fondant_imported_hospital_sales') || '[]');
         const importedFiltered = imported.filter(row => {
             if (!row.date) return false;
@@ -1992,7 +1997,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
             if (toDate && row.date > toDate) return false;
             return true;
         });
-        // دمج الكل
         const allRows = [
             ...filtered.map(inv => ({
                 date: inv.date,
@@ -2013,7 +2017,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
         const resultArea = document.getElementById('babKhairResultArea');
         if (!allRows.length) { resultArea.innerHTML = `<div style="text-align:center;padding:30px;color:#c00;font-weight:bold;">No invoices in selected period.</div>`; lastBabKhairHTML = ''; lastBabKhairRowsData = []; return; }
 
-        // حفظ البيانات لتصدير Excel
         lastBabKhairRowsData = allRows.map(r => ({ number: r.number, date: r.date, customer: r.customer, total: r.amount.toFixed(3), source: r.source }));
 
         let rowsHTML = '';
@@ -2085,7 +2088,6 @@ if (typeof window.syncInvoiceToCloud === 'function') {
         await exportHTMLToPDF(lastBabKhairHTML, lastBabKhairFilename);
     }
 
-    // ⭐ طباعة كشف باب الخير مع تكرار رأس الجدول
     function printBabKhairStatement() {
         if (!lastBabKhairHTML) { alert("اعرض الكشف أولاً"); return; }
         const printWindow = window.open('', '_blank');
@@ -2330,12 +2332,12 @@ if (typeof window.syncInvoiceToCloud === 'function') {
 </script>
 
 <!-- ============================================================ -->
-<!-- Firebase & Firestore Integration (Modular SDK) -->
+<!-- Firebase & Firestore Integration (Modular SDK) — مُصحح -->
 <!-- ============================================================ -->
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
     import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-analytics.js";
-    import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
     // إعدادات المشروع السحابي
     const firebaseConfig = {
@@ -2348,59 +2350,76 @@ if (typeof window.syncInvoiceToCloud === 'function') {
       measurementId: "G-TQJTDPG04Z"
     };
 
-    // تهيئة Firebase
     const app = initializeApp(firebaseConfig);
     const analytics = getAnalytics(app);
     const db = getFirestore(app);
-
-    // ربط قاعدة البيانات بالنظام العام
     window.db = db;
 
-    // دوال المزامنة السحابية مع Firestore
-    import { 
-        collection as fsCollection, 
-        doc as fsDoc, 
-        setDoc as fsSetDoc, 
-        onSnapshot as fsOnSnapshot 
-    } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
-
-    // مزامنة الفواتير المحفوظة لحظياً عند حدوث أي تغيير سحابياً أو محلياً
+    // ✅ مزامنة فاتورة (إنشاء / تعديل) مع Firestore
     window.syncInvoiceToCloud = async function(invoiceData) {
+        if (!invoiceData || !invoiceData.number) return;
         try {
-            const docRef = fsDoc(db, "invoices", String(invoiceData.number));
-            await fsSetDoc(docRef, invoiceData);
-            console.log("تم رفع الفاتورة للسحابة بنجاح:", invoiceData.number);
+            const docRef = doc(db, "invoices", String(invoiceData.number));
+            await setDoc(docRef, invoiceData);
+            console.log("☁️ تم رفع الفاتورة للسحابة بنجاح:", invoiceData.number);
         } catch (e) {
-            console.error("خطأ في رفع الفاتورة للسحابة:", e);
+            console.error("❌ خطأ في رفع الفاتورة للسحابة:", e);
         }
     };
 
-    // الاستماع الفوري للتحديثات من السحابة لجميع الأجهزة المتصلة
-    fsOnSnapshot(fsCollection(db, "invoices"), (snapshot) => {
+    // ✅ حذف فاتورة من Firestore
+    window.deleteInvoiceFromCloud = async function(invoiceNumber) {
+        try {
+            const docRef = doc(db, "invoices", String(invoiceNumber));
+            await deleteDoc(docRef);
+            console.log("🗑️ تم حذف الفاتورة من السحابة:", invoiceNumber);
+        } catch (e) {
+            console.error("❌ خطأ في حذف الفاتورة من السحابة:", e);
+        }
+    };
+
+    // ✅ الاستماع للتحديثات السحابية + دمج ذكي مع بيانات محلية
+    onSnapshot(collection(db, "invoices"), (snapshot) => {
         let cloudInvoices = [];
-        snapshot.forEach((doc) => {
-            cloudInvoices.push(doc.data());
+        snapshot.forEach((d) => cloudInvoices.push(d.data()));
+
+        // رفع أولي للبيانات المحلية إن كانت السحابة فارغة
+        if (cloudInvoices.length === 0) {
+            const localInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
+            if (localInvoices.length > 0) {
+                console.log(`📤 رفع أولي: ${localInvoices.length} فاتورة محلية إلى السحابة...`);
+                localInvoices.forEach(inv => window.syncInvoiceToCloud(inv));
+            }
+            return;
+        }
+
+        // دمج: نستخدم updatedAt لضمان عدم ضياع التعديلات المحلية الأحدث
+        const localInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
+        const mergedMap = new Map();
+        localInvoices.forEach(inv => mergedMap.set(String(inv.number), inv));
+        cloudInvoices.forEach(inv => {
+            const existing = mergedMap.get(String(inv.number));
+            const cloudTs = inv.updatedAt || 0;
+            const localTs = (existing && existing.updatedAt) || 0;
+            // السحابة تفوز فقط إذا كانت أحدث أو متساوية
+            if (!existing || cloudTs >= localTs) {
+                mergedMap.set(String(inv.number), inv);
+            }
         });
 
-        if (cloudInvoices.length > 0) {
-            // دمج الفواتير السحابية مع المحلية لضمان عدم ضياع أي بيانات
-            const localInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
-            
-            // خريطة لتجنب التكرار والاعتتماد على الأحدث
-            const mergedMap = new Map();
-            localInvoices.forEach(inv => mergedMap.set(String(inv.number), inv));
-            cloudInvoices.forEach(inv => mergedMap.set(String(inv.number), inv));
+        const finalInvoices = Array.from(mergedMap.values());
+        localStorage.setItem('fondant_saved_invoices', JSON.stringify(finalInvoices));
 
-            const finalInvoices = Array.from(mergedMap.values());
-            localStorage.setItem('fondant_saved_invoices', JSON.stringify(finalInvoices));
-            
-            // تحديث واجهة الفواتير المحفوظة إذا كانت مفتوحة
-            if (typeof renderSavedInvoicesList === 'function' && document.getElementById('savedInvoicesModal').style.display === 'flex') {
-                renderSavedInvoicesList();
-            }
+        // تحديث واجهة الفواتير المحفوظة إن كانت مفتوحة
+        const modal = document.getElementById('savedInvoicesModal');
+        if (modal && modal.style.display === 'flex' && typeof window.renderSavedInvoicesList === 'function') {
+            window.renderSavedInvoicesList();
         }
+    }, (error) => {
+        console.error("❌ خطأ في الاستماع للسحابة:", error);
     });
 
+    console.log("🔥 Firebase + Firestore جاهز للعمل");
 </script>
 
 </body>
