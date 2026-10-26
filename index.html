@@ -865,16 +865,56 @@
         localStorage.setItem('fondant_last_backup_time', Date.now()); checkBackupReminder();
         addLogEntry("تم تصدير نسخة احتياطية", false); alert("تم تحميل النسخة الاحتياطية بنجاح!");
     }
-    function importBackup(event) {
+
+    // ✅ دالة الاستيراد المعدّلة: تزامن الفواتير المستعادة مع السحابة
+    async function importBackup(event) {
         const file = event.target.files[0]; if (!file) return;
         const reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = async function(e) {
             try {
                 const data = JSON.parse(e.target.result);
-                ['last_inv_num','saved_invoices','logs','items','external_items','hospital_customers','external_customers','external_customers_meta','imported_hospital_sales','acknowledged_gaps'].forEach(key => { if (data[key]) localStorage.setItem('fondant_' + key, data[key]); });
+                ['last_inv_num','saved_invoices','logs','items','external_items','hospital_customers','external_customers','external_customers_meta','imported_hospital_sales','acknowledged_gaps'].forEach(key => {
+                    if (data[key]) localStorage.setItem('fondant_' + key, data[key]);
+                });
                 localStorage.setItem('fondant_last_backup_time', Date.now());
-                alert("تم استعادة النسخة الاحتياطية بنجاح! سيتم تحديث الصفحة الآن."); location.reload();
-            } catch (err) { alert("ملف النسخة الاحتياطية غير صالح أو تالف."); }
+
+                // ✅ مزامنة الفواتير المستعادة مع السحابة
+                const restoredInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
+                if (restoredInvoices.length > 0) {
+                    // نحدّث updatedAt لكل الفواتير المستعادة حتى تفوز في الدمج
+                    const now = Date.now();
+                    restoredInvoices.forEach((inv, idx) => { inv.updatedAt = now + idx; });
+                    localStorage.setItem('fondant_saved_invoices', JSON.stringify(restoredInvoices));
+
+                    // ننتظر جاهزية Firebase (بحد أقصى 8 ثوان)
+                    let waited = 0;
+                    while (typeof window.bulkSyncInvoicesToCloud !== 'function' && waited < 8000) {
+                        await new Promise(r => setTimeout(r, 100));
+                        waited += 100;
+                    }
+
+                    if (typeof window.bulkSyncInvoicesToCloud === 'function') {
+                        try {
+                            alert(`⏳ جاري رفع ${restoredInvoices.length} فاتورة إلى السحابة...\nيرجى الانتظار قليلاً`);
+                            const result = await window.bulkSyncInvoicesToCloud(restoredInvoices);
+                            console.log(`☁️ مزامنة النسخة الاحتياطية: نجح ${result.success}، فشل ${result.failed}`);
+                            alert(`✅ تم استعادة النسخة الاحتياطية!\n📤 مزامنة سحابية: نجح ${result.success}، فشل ${result.failed}\n\nسيتم تحديث الصفحة الآن.`);
+                        } catch(syncErr) {
+                            console.error("⚠️ فشلت المزامنة السحابية:", syncErr);
+                            alert("تم الاستعادة محلياً لكن فشلت المزامنة السحابية. تحقق من اتصال الإنترنت.");
+                        }
+                    } else {
+                        console.warn("⚠️ Firebase لم يكن جاهزاً، سيتم الرفع عند أول اتصال");
+                        alert("تم الاستعادة محلياً. Firebase لم يكن جاهزاً — سيُزامن تلقائياً عند فتح الصفحة.");
+                    }
+                } else {
+                    alert("تم استعادة النسخة الاحتياطية بنجاح! (لا توجد فواتير للمزامنة)");
+                }
+                location.reload();
+            } catch (err) {
+                console.error(err);
+                alert("ملف النسخة الاحتياطية غير صالح أو تالف.");
+            }
         };
         reader.readAsText(file);
     }
@@ -1388,8 +1428,6 @@
         openModal('missingInvoicesModal');
     }
     function missingYes() { const current = _missingQueue[0]; if (current != null) { const ack = JSON.parse(localStorage.getItem('fondant_acknowledged_gaps') || '[]'); if (!ack.includes(current)) ack.push(current); localStorage.setItem('fondant_acknowledged_gaps', JSON.stringify(ack)); addLogEntry(`تأكيد تجاهل رقم الفاتورة ${current}`, false); } _missingQueue.shift(); showNextMissingWarning(); }
-
-    // ✅ إصلاح: إزالة الاستدعاء المعطوب لـ newInvoiceData + إضافة مزامنة صحيحة للسحابة
     function missingRegisterCancelled() {
         const current = _missingQueue[0];
         if (current != null) {
@@ -1400,15 +1438,11 @@
                 saved.push(cancelledInvoice);
                 localStorage.setItem('fondant_saved_invoices', JSON.stringify(saved));
                 addLogEntry(`تسجيل الفاتورة ${current} كملغية`, false);
-                // ✅ مزامنة الفاتورة الملغية مع السحابة
-                if (typeof window.syncInvoiceToCloud === 'function') {
-                    window.syncInvoiceToCloud(cancelledInvoice);
-                }
+                if (typeof window.syncInvoiceToCloud === 'function') window.syncInvoiceToCloud(cancelledInvoice);
             }
         }
         _missingQueue.shift(); showNextMissingWarning();
     }
-
     function missingNo() { _missingQueue = []; closeModal('missingInvoicesModal'); const cb = _missingCallback; _missingCallback = null; if (cb) cb(); }
 
     document.getElementById('saveInvoiceBtn').addEventListener('click', function() {
@@ -1433,7 +1467,6 @@
         if (invNum > expected) { const ack = JSON.parse(localStorage.getItem('fondant_acknowledged_gaps') || '[]'); for (let n = expected; n < invNum; n++) if (!ack.includes(n)) ack.push(n); localStorage.setItem('fondant_acknowledged_gaps', JSON.stringify(ack)); }
         closeModal('skipWarningModal'); performSaveInvoice(invNum, false);
     }
-    // ✅ إصلاح: إضافة مزامنة الفواتير الملغية مع السحابة
     function skipWarningRegisterCancelled() {
         const invNum = window._skipInvNum, expected = window._skipExpected;
         if (invNum > expected) {
@@ -1444,9 +1477,7 @@
                 if (saved.some(inv => parseInt(inv.number) === n)) continue;
                 const cancelledInvoice = { number: n, date: today, customer: '', phone: '', total: '0.000', type: invoiceType, deliveryFee: 0, items: [], returns: [], cancelled: true, cancelledAt: new Date().toISOString(), updatedAt: Date.now() };
                 saved.push(cancelledInvoice);
-                if (typeof window.syncInvoiceToCloud === 'function') {
-                    window.syncInvoiceToCloud(cancelledInvoice);
-                }
+                if (typeof window.syncInvoiceToCloud === 'function') window.syncInvoiceToCloud(cancelledInvoice);
                 count++;
             }
             if (count > 0) { localStorage.setItem('fondant_saved_invoices', JSON.stringify(saved)); addLogEntry(`تسجيل ${count} فاتورة ملغية`, false); }
@@ -1498,18 +1529,11 @@
         const currentStreet = streetInput.innerText.trim();
         const currentJeda = document.getElementById('jedaInput').value;
         const currentHome = document.getElementById('homeInput').value;
-
-        // ✅ إضافة updatedAt لمقارنة التحديثات عند الدمج من السحابة
         const newInvoiceData = { number: invNum, date: invoiceDateInput.value, customer: custName, phone: phoneVal, total: grandTotal, type: invoiceType, deliveryFee: deliveryFee, items, returns, area: currentArea, block: currentBlock, street: currentStreet, jeda: currentJeda, home: currentHome, updatedAt: Date.now() };
         if (cancelled) { newInvoiceData.cancelled = true; newInvoiceData.cancelledAt = new Date().toISOString(); }
         savedInvoices.push(newInvoiceData);
         localStorage.setItem('fondant_saved_invoices', JSON.stringify(savedInvoices));
-
-        // ✅ الأهم: مزامنة الفاتورة مع السحابة (كانت مفقودة تماماً!)
-        if (typeof window.syncInvoiceToCloud === 'function') {
-            window.syncInvoiceToCloud(newInvoiceData);
-        }
-
+        if (typeof window.syncInvoiceToCloud === 'function') window.syncInvoiceToCloud(newInvoiceData);
         const prevLast = parseInt(localStorage.getItem('fondant_last_inv_num') || "5000");
         if (parseInt(invNum) > prevLast) localStorage.setItem('fondant_last_inv_num', invNum);
         if (!cancelled && invoiceType === 'external' && (custName || phoneVal)) {
@@ -1645,10 +1669,10 @@
             row.insertCell(5).innerHTML = `<button class="btn btn-secondary" style="padding:3px 10px;" onclick="loadSavedInvoice(${inv.number})">${btnLabel}</button>`;
         });
     }
+    window.renderSavedInvoicesList = renderSavedInvoicesList;
 
     document.getElementById('viewInvoicesBtn').addEventListener('click', () => { renderSavedInvoicesList(); openModal('savedInvoicesModal'); setTimeout(() => { checkAndWarnMissingInvoices(); }, 300); });
 
-    // ✅ إصلاح: إضافة حذف الفاتورة من السحابة أيضاً
     function cancelLastInvoice() {
         requestPassword('أدخل كلمة المرور لإلغاء آخر فاتورة', '123321', () => {
             const saved = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
@@ -1660,10 +1684,7 @@
             const newSaved = saved.filter(inv => parseInt(inv.number) !== parseInt(lastInv.number));
             localStorage.setItem('fondant_saved_invoices', JSON.stringify(newSaved));
             localStorage.setItem('fondant_last_inv_num', parseInt(lastInv.number) - 1);
-            // ✅ حذف من السحابة أيضاً
-            if (typeof window.deleteInvoiceFromCloud === 'function') {
-                window.deleteInvoiceFromCloud(lastInv.number);
-            }
+            if (typeof window.deleteInvoiceFromCloud === 'function') window.deleteInvoiceFromCloud(lastInv.number);
             currentInvoiceNum = getExpectedNextInvoiceNumber();
             invoiceNumberInput.value = currentInvoiceNum;
             addLogEntry(`حذف آخر فاتورة رقم [ ${lastInv.number} ]`, false);
@@ -2332,14 +2353,13 @@
 </script>
 
 <!-- ============================================================ -->
-<!-- Firebase & Firestore Integration (Modular SDK) — مُصحح -->
+<!-- Firebase & Firestore Integration (Modular SDK) -->
 <!-- ============================================================ -->
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
     import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-analytics.js";
-    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
-    // إعدادات المشروع السحابي
     const firebaseConfig = {
       apiKey: "AIzaSyB2g8ZrwpaF9svjQxn5xfILZDkZcG34d8Q",
       authDomain: "testonlinefchoco.firebaseapp.com",
@@ -2355,19 +2375,17 @@
     const db = getFirestore(app);
     window.db = db;
 
-    // ✅ مزامنة فاتورة (إنشاء / تعديل) مع Firestore
     window.syncInvoiceToCloud = async function(invoiceData) {
         if (!invoiceData || !invoiceData.number) return;
         try {
             const docRef = doc(db, "invoices", String(invoiceData.number));
             await setDoc(docRef, invoiceData);
-            console.log("☁️ تم رفع الفاتورة للسحابة بنجاح:", invoiceData.number);
+            console.log("☁️ تم رفع الفاتورة للسحابة:", invoiceData.number);
         } catch (e) {
             console.error("❌ خطأ في رفع الفاتورة للسحابة:", e);
         }
     };
 
-    // ✅ حذف فاتورة من Firestore
     window.deleteInvoiceFromCloud = async function(invoiceNumber) {
         try {
             const docRef = doc(db, "invoices", String(invoiceNumber));
@@ -2378,22 +2396,51 @@
         }
     };
 
-    // ✅ الاستماع للتحديثات السحابية + دمج ذكي مع بيانات محلية
+    // ✅ رفع دفعة من الفواتير (تُستخدم عند استعادة النسخة الاحتياطية)
+    window.bulkSyncInvoicesToCloud = async function(invoices) {
+        if (!invoices || invoices.length === 0) return { success: 0, failed: 0 };
+        let success = 0, failed = 0;
+        const chunkSize = 500;
+        for (let i = 0; i < invoices.length; i += chunkSize) {
+            const chunk = invoices.slice(i, i + chunkSize);
+            try {
+                const batch = writeBatch(db);
+                let validCount = 0;
+                chunk.forEach(inv => {
+                    if (!inv || !inv.number) { failed++; return; }
+                    const docRef = doc(db, "invoices", String(inv.number));
+                    batch.set(docRef, inv);
+                    validCount++;
+                });
+                if (validCount > 0) {
+                    await batch.commit();
+                    success += validCount;
+                }
+            } catch (e) {
+                console.error(`❌ خطأ في رفع دفعة ${i}..${i+chunkSize}:`, e);
+                failed += chunk.length;
+            }
+        }
+        console.log(`☁️ Bulk sync: نجح ${success} / فشل ${failed}`);
+        return { success, failed };
+    };
+
+    let isInitialCloudLoad = true;
     onSnapshot(collection(db, "invoices"), (snapshot) => {
-        let cloudInvoices = [];
+        const cloudInvoices = [];
         snapshot.forEach((d) => cloudInvoices.push(d.data()));
 
-        // رفع أولي للبيانات المحلية إن كانت السحابة فارغة
         if (cloudInvoices.length === 0) {
             const localInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
-            if (localInvoices.length > 0) {
+            if (localInvoices.length > 0 && isInitialCloudLoad) {
+                isInitialCloudLoad = false;
                 console.log(`📤 رفع أولي: ${localInvoices.length} فاتورة محلية إلى السحابة...`);
-                localInvoices.forEach(inv => window.syncInvoiceToCloud(inv));
+                window.bulkSyncInvoicesToCloud(localInvoices);
             }
             return;
         }
+        isInitialCloudLoad = false;
 
-        // دمج: نستخدم updatedAt لضمان عدم ضياع التعديلات المحلية الأحدث
         const localInvoices = JSON.parse(localStorage.getItem('fondant_saved_invoices') || '[]');
         const mergedMap = new Map();
         localInvoices.forEach(inv => mergedMap.set(String(inv.number), inv));
@@ -2401,7 +2448,6 @@
             const existing = mergedMap.get(String(inv.number));
             const cloudTs = inv.updatedAt || 0;
             const localTs = (existing && existing.updatedAt) || 0;
-            // السحابة تفوز فقط إذا كانت أحدث أو متساوية
             if (!existing || cloudTs >= localTs) {
                 mergedMap.set(String(inv.number), inv);
             }
@@ -2410,7 +2456,6 @@
         const finalInvoices = Array.from(mergedMap.values());
         localStorage.setItem('fondant_saved_invoices', JSON.stringify(finalInvoices));
 
-        // تحديث واجهة الفواتير المحفوظة إن كانت مفتوحة
         const modal = document.getElementById('savedInvoicesModal');
         if (modal && modal.style.display === 'flex' && typeof window.renderSavedInvoicesList === 'function') {
             window.renderSavedInvoicesList();
