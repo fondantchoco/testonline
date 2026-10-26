@@ -1410,6 +1410,11 @@
             const today = getTodayDateInputString();
             if (!saved.some(inv => parseInt(inv.number) === current)) { saved.push({ number: current, date: today, customer: '', phone: '', total: '0.000', type: 'hospital', deliveryFee: 0, items: [], returns: [], cancelled: true, cancelledAt: new Date().toISOString() }); localStorage.setItem('fondant_saved_invoices', JSON.stringify(saved)); addLogEntry(`تسجيل الفاتورة ${current} كملغية`, false); }
         }
+// إرسال الفاتورة إلى سحابة Firestore فوراً
+if (typeof window.syncInvoiceToCloud === 'function') {
+    window.syncInvoiceToCloud(newInvoiceData);
+}
+
         _missingQueue.shift(); showNextMissingWarning();
     }
     function missingNo() { _missingQueue = []; closeModal('missingInvoicesModal'); const cb = _missingCallback; _missingCallback = null; if (cb) cb(); }
@@ -2396,7 +2401,6 @@
         }
     });
 
-</script>
 </script>
 
 </body>
