@@ -29,8 +29,6 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 
     <!-- Firebase compat SDKs are deferred so they download while the page is being parsed. -->
-    <script defer src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-    <script defer src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
     <style>
         :root {
@@ -1370,12 +1368,50 @@
     </a>
 
     <!-- Bootstrap JavaScript bundle -->
-    <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script async src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <!-- Cross-device Firebase startup (compat SDK for broader mobile browser support) -->
     <script>
       (function initFirebaseCompat() {
-        const start = () => {
+        // Load Firebase only after the document is interactive. A slow CDN must never
+        // keep the browser tab in its loading state or block typing in the login form.
+        let firebaseSdkLoadPromise = null;
+        const loadExternalScript = (src, timeoutMs = 12000) => new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.async = true;
+          script.crossOrigin = 'anonymous';
+          let settled = false;
+          const finish = (ok, error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            script.onload = script.onerror = null;
+            if (ok) resolve();
+            else { script.remove(); reject(error || new Error('SDK load timeout')); }
+          };
+          const timer = setTimeout(() => finish(false, new Error('SDK load timeout: ' + src)), timeoutMs);
+          script.onload = () => finish(true);
+          script.onerror = () => finish(false, new Error('SDK load failed: ' + src));
+          document.head.appendChild(script);
+        });
+        const ensureFirebaseSdk = () => {
+          if (window.firebase && Array.isArray(window.firebase.apps) && typeof window.firebase.firestore === 'function') return Promise.resolve();
+          if (firebaseSdkLoadPromise) return firebaseSdkLoadPromise;
+          firebaseSdkLoadPromise = (async () => {
+            if (!window.firebase || !Array.isArray(window.firebase.apps)) {
+              await loadExternalScript('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
+            }
+            if (!window.firebase || typeof window.firebase.firestore !== 'function') {
+              await loadExternalScript('https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js');
+            }
+            if (!window.firebase || !Array.isArray(window.firebase.apps) || typeof window.firebase.firestore !== 'function') {
+              throw new Error('Firebase SDK did not initialize after loading.');
+            }
+          })().catch(err => { firebaseSdkLoadPromise = null; throw err; });
+          return firebaseSdkLoadPromise;
+        };
+        const start = async () => {
           const badge = document.getElementById('syncStatusBadge');
           const setBadge = (kind, text) => {
             if (!badge) return;
@@ -1402,7 +1438,13 @@
           window.firebaseInitFailed = false;
           window.remoteDataLoaded = false;
           window.cloudInitialized = false;
-          if (!window.firebase || !firebase.apps) {
+          try {
+            await ensureFirebaseSdk();
+          } catch (sdkError) {
+            markFailure(new Error('تعذر تحميل مكتبات الاتصال خلال المهلة المحددة. يمكنك إدخال بياناتك أثناء المحاولة، ثم إعادة الاتصال. ' + (sdkError && sdkError.message || '')));
+            return;
+          }
+          if (!window.firebase || !window.firebase.apps) {
             markFailure(new Error('Firebase SDK could not be loaded. Open the hosted HTTPS site and check the network.'));
             return;
           }
@@ -4411,6 +4453,13 @@ const DEFAULT_ACCOUNT_GROUPS = [
 
 
 
+
+<style id="fc-login-interaction-failsafe">
+  #loginScreen{pointer-events:auto!important;}
+  #loginScreen .login-card{position:relative;z-index:1;pointer-events:auto!important;}
+  #loginScreen input,#loginScreen button,#loginScreen a{pointer-events:auto!important;}
+  #loginScreen input{user-select:text!important;-webkit-user-select:text!important;touch-action:manipulation;}
+</style>
 </body></html>`);
             w.document.close();
         }
@@ -5789,7 +5838,7 @@ const DEFAULT_ACCOUNT_GROUPS = [
                 if (retry) retry.style.display = '';
             } else {
                 button.disabled = true;
-                status.textContent = 'جارٍ الاتصال بالخادم وتحميل بيانات النظام...';
+                status.textContent = 'جارٍ تحميل بيانات الدخول. يمكنك كتابة اسم المستخدم وكلمة المرور الآن.';
                 status.className = 'small text-muted mb-2';
                 if (retry) retry.style.display = 'none';
             }
@@ -5797,7 +5846,7 @@ const DEFAULT_ACCOUNT_GROUPS = [
         function login(){
             if (!window.remoteDataLoaded && !(window.firebaseInitFailed && window.localCacheFound)) {
                 const status=document.getElementById('loginConnectionStatus');
-                if(status)status.textContent='لم تكتمل قراءة بيانات المستخدمين بعد. انتظر اتصال الخادم أو افتح الموقع من رابط HTTPS.';
+                if(status)status.textContent='بيانات الدخول لم تكتمل بعد. يمكنك الكتابة الآن، وسيُفعّل زر الدخول بعد تحميل البيانات أو توفر النسخة المحلية.';
                 return;
             }
             const u=document.getElementById('loginUsername').value.trim(),p=document.getElementById('loginPassword').value;
@@ -8602,9 +8651,31 @@ const oldCanWrite=window.canWrite;window.canWrite=function(){if(typeof currentUs
 const oldCanManageAccounts=window.canManageAccounts;window.canManageAccounts=function(){return typeof currentUser!=='undefined'&&!!currentUser&&(currentUser.role==='admin'||window.hasPermission('chartOfAccounts','edit'))&&(currentUser.role==='admin'||window.canWrite());};
 
 // Remove product/vendor technology names from visible text while preserving integration code internally.
-function sanitizeVisibleTech(){const root=document.body;if(!root)return;const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(n=>{if(!n.parentElement||['SCRIPT','STYLE'].includes(n.parentElement.tagName))return;let v=n.nodeValue;v=v.replace(/Firebase\s*Firestore/gi,'المزامنة السحابية').replace(/Firebase Authentication/gi,'نظام مصادقة المستخدمين').replace(/Firebase/gi,'الخدمة السحابية').replace(/Firestore/gi,'قاعدة البيانات السحابية');if(v!==n.nodeValue)n.nodeValue=v;});const retry=$('retryCloudButton');if(retry)retry.textContent='إعادة المحاولة';}
+let techSanitizingVisibleText=false;
+function sanitizeVisibleTech(){
+  if(techSanitizingVisibleText)return;
+  const root=document.body;if(!root)return;
+  techSanitizingVisibleText=true;
+  try{
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);
+    nodes.forEach(n=>{
+      if(!n.parentElement||['SCRIPT','STYLE'].includes(n.parentElement.tagName))return;
+      const oldValue=n.nodeValue||'';
+      const newValue=oldValue.replace(/Firebase\s*Firestore/gi,'المزامنة السحابية').replace(/Firebase Authentication/gi,'نظام مصادقة المستخدمين').replace(/Firebase/gi,'الخدمة السحابية').replace(/Firestore/gi,'قاعدة البيانات السحابية');
+      if(newValue!==oldValue)n.nodeValue=newValue;
+    });
+    const retry=$('retryCloudButton');
+    // Avoid writing the same text again: the observer watches childList changes.
+    if(retry&&retry.textContent!=='إعادة المحاولة')retry.textContent='إعادة المحاولة';
+  }finally{techSanitizingVisibleText=false;}
+}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{sanitizeVisibleTech();}, {once:true});else sanitizeVisibleTech();
-const techObserver=new MutationObserver(()=>sanitizeVisibleTech());techObserver.observe(document.body,{childList:true,subtree:true,characterData:true});
+const techObserver=new MutationObserver(records=>{
+  if(techSanitizingVisibleText)return;
+  if(records&&records.length)sanitizeVisibleTech();
+});
+techObserver.observe(document.body,{childList:true,subtree:true,characterData:true});
 
 // XBRL route: initialize dates and include permission visibility.
 function initXbrl(){const today=dateToday(),y=today.slice(0,4);if($('xbrlAsOf')&&!$('xbrlAsOf').value)$('xbrlAsOf').value=today;if($('xbrlIncomeStart')&&!$('xbrlIncomeStart').value)$('xbrlIncomeStart').value=y+'-01-01';if($('xbrlIncomeEnd')&&!$('xbrlIncomeEnd').value)$('xbrlIncomeEnd').value=today;}
